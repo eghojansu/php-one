@@ -12,9 +12,9 @@ class KernelContextTest extends TestCase
 {
     protected $kernelize = true;
 
-    public function testGetContext()
+    public function testContext()
     {
-        $this->assertCount(0, $this->kernel->getContext());
+        $this->assertCount(0, $this->kernel->context());
     }
 
     public function testRefBasic()
@@ -28,7 +28,7 @@ class KernelContextTest extends TestCase
         // adding non-reference
         $foo = 'bar';
 
-        $this->assertArrayNotHasKey('foo', $this->kernel->getContext());
+        $this->assertArrayNotHasKey('foo', $this->kernel->context());
 
         // adding reference
         $foo = &$this->kernel->ref('foo', true, $ref);
@@ -39,7 +39,7 @@ class KernelContextTest extends TestCase
         // adding reference value
         $foo = 'bar';
 
-        $this->assertArrayHasKey('foo', $this->kernel->getContext());
+        $this->assertArrayHasKey('foo', $this->kernel->context());
 
         // confirm existance
         unset($foo);
@@ -60,7 +60,7 @@ class KernelContextTest extends TestCase
         // adding non-reference
         $foo = 'bar';
 
-        $this->assertArrayNotHasKey('foo', $this->kernel->getContext());
+        $this->assertArrayNotHasKey('foo', $this->kernel->context());
 
         // adding reference
         $foo = &$this->kernel->ref('foo.bar', true, $ref);
@@ -71,7 +71,7 @@ class KernelContextTest extends TestCase
         // adding reference value
         $foo = 'bar';
 
-        $this->assertArrayHasKey('foo', $this->kernel->getContext());
+        $this->assertArrayHasKey('foo', $this->kernel->context());
 
         // confirm existance
         unset($foo);
@@ -92,7 +92,7 @@ class KernelContextTest extends TestCase
         // adding non-reference
         $foo = 'bar';
 
-        $this->assertArrayNotHasKey('foo', $this->kernel->getContext());
+        $this->assertArrayNotHasKey('foo', $this->kernel->context());
 
         // adding reference
         $foo = &$this->kernel->ref('foo', true, $ref);
@@ -104,7 +104,7 @@ class KernelContextTest extends TestCase
         $foo = new stdClass();
         $foo->bar = 'bar';
 
-        $this->assertArrayHasKey('foo', $this->kernel->getContext());
+        $this->assertArrayHasKey('foo', $this->kernel->context());
 
         // confirm existance
         unset($foo);

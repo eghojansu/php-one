@@ -6,7 +6,12 @@ class Kernel implements \ArrayAccess
 {
     private $hive = array();
 
-    public function getContext(): array
+    public function __construct(array $context = null)
+    {
+        $this->initialize($context ?? array());
+    }
+
+    public function context(): array
     {
         return $this->hive;
     }
@@ -47,9 +52,9 @@ class Kernel implements \ArrayAccess
     {
         return static::reduce(
             $keys,
-            fn (array $all, $key, $alias) => ($all + array(
+            fn (array $all, $key, $alias) => $all + array(
                 is_numeric($alias) ? $key : $alias => $this->get($key),
-            )),
+            ),
             array(),
         );
     }
@@ -111,6 +116,8 @@ class Kernel implements \ArrayAccess
     public function &ref($key, bool $add = true, array &$ref = null)
     {
         $ref = array('found' => false, 'parts' => array($key));
+
+        $this->prepareReference($key);
 
         if ($add) {
             $var = &$this->hive;
@@ -195,6 +202,8 @@ class Kernel implements \ArrayAccess
 
     public function &unref($key, array &$parts = null)
     {
+        $this->prepareReference($key);
+
         $parts = array($key);
         $var = &$this->hive;
 
@@ -278,14 +287,35 @@ class Kernel implements \ArrayAccess
         $this->remove($name);
     }
 
-    public static function create(): static
+    protected function initialize(array $context): void
     {
-        return new static();
+        $server = $context['SERVER'] ?? null;
+
+        $this->hive = array();
+
+        $this->allSet($context);
     }
 
-    public static function createFromGlobals(): static
+    protected function prepareReference($key): void
     {
-        return self::create();
+        // TODO: prepare reference
+    }
+
+    public static function create(array $context = null): static
+    {
+        return new static($context);
+    }
+
+    public static function createFromGlobals(array $context = null): static
+    {
+        return self::create(($context ?? array()) + array(
+            'COOKIE' => $_COOKIE,
+            'ENV' => $_ENV,
+            'FILES' => $_FILES,
+            'GET' => $_GET,
+            'POST' => $_POST,
+            'SERVER' => $_SERVER,
+        ));
     }
 
     public static function parts(string $key): array
