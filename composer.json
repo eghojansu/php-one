@@ -1,0 +1,23 @@
+{
+    "name": "ekok/php-one",
+    "type": "library",
+    "description": "PHP Framework",
+    "keywords": ["framework", "php"],
+    "license": "MIT",
+    "require": {
+        "php": "^8.0.2"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.5.10"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ekok\\One\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
+        }
+    }
+}
