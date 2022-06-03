@@ -23,7 +23,14 @@ abstract class TestCase extends TestCaseBase
     protected function tearDown(): void
     {
         if ($this->kernelize) {
-            // TODO: clearing
+            $cache = $this->kernel['CACHE_DRIVER'];
+            $ref = $this->kernel['CACHE_REF'];
+
+            if ('folder' === $cache && $ref) {
+                $files = glob($ref . '/*');
+
+                array_walk($files, static fn ($file) => unlink($file));
+            }
         }
     }
 }

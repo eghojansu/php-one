@@ -2,7 +2,6 @@
 
 namespace Tests\Unit;
 
-use stdClass;
 use Tests\Feature\Arr;
 use Tests\Feature\Bag;
 use Tests\Feature\Ent;
@@ -14,7 +13,7 @@ class KernelContextTest extends TestCase
 
     public function testContext()
     {
-        $this->assertCount(0, $this->kernel->context());
+        $this->assertCount(13, $this->kernel->context());
     }
 
     public function testRefBasic()
@@ -101,7 +100,7 @@ class KernelContextTest extends TestCase
         $this->assertFalse($ref['found']);
 
         // adding reference value
-        $foo = new stdClass();
+        $foo = new \stdClass();
         $foo->bar = 'bar';
 
         $this->assertArrayHasKey('foo', $this->kernel->context());
@@ -162,7 +161,7 @@ class KernelContextTest extends TestCase
         $foo = &$this->kernel->ref('foo');
         $foo = 'bar';
 
-        $this->assertSame(array(), $this->kernel->unref('foo'));
+        $this->assertArrayNotHasKey('foo', $this->kernel->unref('foo'));
 
         $arr = &$this->kernel->ref('arr');
         $arr = array('foo' => 'bar', 'bar' => true);
@@ -231,6 +230,7 @@ class KernelContextTest extends TestCase
         $this->assertFalse($this->kernel->allHas('foo'));
         $this->kernel->allSet(array('foo' => 'bar'));
         $this->kernel->allSet(array('bar' => 'baz'), 'foo_');
+        $this->assertTrue($this->kernel->allHas('foo', 'foo_bar'));
         $this->assertSame(array(
             'foo' => 'bar',
             'foo_alias' => 'bar',
@@ -256,5 +256,29 @@ class KernelContextTest extends TestCase
         $this->assertNull($pushedNull);
         $this->assertNull($shiftedNull);
         $this->assertSame(array('foo' => 'bar'), $this->kernel->get('foo'));
+    }
+
+    public function testEscapedDot()
+    {
+        $this->kernel['foo.bar\\.baz'] = 'qux';
+
+        $this->assertSame(array('bar.baz' => 'qux'), $this->kernel['foo']);
+        $this->assertSame('qux', $this->kernel['foo.bar\\.baz']);
+    }
+
+    public function testSessionAccess()
+    {
+        $this->assertNull($this->kernel['SESSION']);
+
+        $this->kernel['SESSION.foo'] = 'bar';
+        $this->kernel['SESSION.bar'] = 'baz';
+
+        $this->assertSame('bar', $this->kernel['SESSION.foo']);
+        $this->assertSame('baz', $this->kernel['SESSION.bar']);
+
+        unset($this->kernel['SESSION.foo']);
+        unset($this->kernel['SESSION']);
+
+        $this->assertNull($this->kernel['SESSION']);
     }
 }

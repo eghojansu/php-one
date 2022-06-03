@@ -4,7 +4,9 @@ namespace Ekok\One;
 
 class Kernel implements \ArrayAccess
 {
-    private $hive = array();
+    const CACHE_FOLDER = 'folder';
+
+    protected $hive = array();
 
     public function __construct(array $context = null)
     {
@@ -30,17 +32,22 @@ class Kernel implements \ArrayAccess
 
     public function set($key, $value): static
     {
-        $var = &$this->ref($key);
+        $var = &$this->ref($key, true, $ref);
         $var = $value;
 
-        return $this;
+        return $this->trigger(
+            'contextset',
+            $ref['parts'][0],
+            $value,
+            ...array_slice($ref['parts'], 1),
+        );
     }
 
     public function remove($key): static
     {
-        $this->unref($key);
+        $this->unref($key, $parts);
 
-        return $this;
+        return $this->trigger('contextremove', ...$parts);
     }
 
     public function allHas(...$keys): bool
@@ -113,11 +120,146 @@ class Kernel implements \ArrayAccess
         return array_shift($var);
     }
 
+    public function cacheHas(string $key): bool
+    {
+        $this->cacheGet($key, $ref);
+
+        return $ref['exists'];
+    }
+
+    public function cacheGet(string $key, array &$ref = null)
+    {
+        $cache = match ($this->hive['CACHE_DRIVER']) {
+            static::CACHE_FOLDER => (
+                file_exists($file = $this->cacheFile($key))
+                && ($cache = file_get_contents($file)) ? $cache : null
+            ),
+            default => null,
+        };
+
+        list($value, $time) = (
+            $cache
+            && ($pairs = static::unserialize($cache))
+            && isset($pairs[0], $pairs[1])
+        ) ? $pairs : array(null, -1);
+
+        $ref = array(
+            'time' => $time,
+            'exists' => $time >= 0,
+            'expired' => $time > 0 && $time < time(),
+        );
+
+        if ($ref['expired']) {
+            $value = null;
+        }
+
+        return $value;
+    }
+
+    public function cacheSet(
+        string $key,
+        $value,
+        int $ttl = 0,
+        bool &$saved = null,
+    ): static {
+        $saved = false;
+        $cache = array($value, $ttl ? time() + $ttl : 0);
+
+        list($save, $pos, $args) = match ($this->hive['CACHE_DRIVER']) {
+            static::CACHE_FOLDER => array(
+                'file_put_contents',
+                1,
+                array($this->cacheFile($key, true)),
+            ),
+            default => array(null, null, null),
+        };
+
+        if ($save) {
+            $saved = (bool) $save(...array_replace($args, array(
+                $pos => static::serialize($cache)
+            )));
+        }
+
+        return $this;
+    }
+
+    public function cacheRemove(string $key, bool &$removed = null): static
+    {
+        $removed = false;
+
+        list($remove, $args) = match ($this->hive['CACHE_DRIVER']) {
+            static::CACHE_FOLDER => array(
+                ($file = $this->cacheFile($key)) && file_exists($file) ? 'unlink' : null,
+                array($file),
+            ),
+            default => array(null, null),
+        };
+
+        if ($remove) {
+            $removed = $remove(...$args);
+        }
+
+        return $this;
+    }
+
+    public function cacheClear(
+        string $prefix = null,
+        string $suffix = null,
+        int &$removed = null,
+    ): static {
+        $removed = 0;
+        $calls = match ($this->hive['CACHE_DRIVER']) {
+            static::CACHE_FOLDER => array(
+                glob(
+                    $this->hive['CACHE_REF'] . '/' .
+                    $prefix . '*' . $suffix . '.cache',
+                ),
+                array('file_exists'),
+                array('unlink'),
+            ),
+            default => null,
+        };
+
+        if ($calls) {
+            $args = array_shift($calls);
+
+            array_walk(
+                $args,
+                function ($arg) use ($calls, &$removed) {
+                    $removed += (int) array_reduce(
+                        $calls,
+                        function ($cont, $args) use ($arg) {
+                            if ($cont) {
+                                $call = array_shift($args);
+                                $pos = array_shift($args) ?? 0;
+                                $args[$pos] = $arg;
+
+                                $cont = $call(...$args);
+                            }
+
+                            return $cont;
+                        },
+                        true,
+                    );
+                },
+            );
+        }
+
+        return $this;
+    }
+
+    protected function cacheFile(string $key, bool $create = false): string|null
+    {
+        $dir = $this->hive['CACHE_REF'];
+
+        is_dir($dir) || ($create && mkdir($dir, 0755, true));
+
+        return $dir . '/' . $key . '.cache';
+    }
+
     public function &ref($key, bool $add = true, array &$ref = null)
     {
-        $ref = array('found' => false, 'parts' => array($key));
-
-        $this->prepareReference($key);
+        $this->trigger('contextprepare', ...($parts = static::parts($key)));
 
         if ($add) {
             $var = &$this->hive;
@@ -125,20 +267,16 @@ class Kernel implements \ArrayAccess
             $var = $this->hive;
         }
 
-        if (
-            ($found = isset($var[$key]) || array_key_exists($key, $var))
-            || !is_string($key)
-            || false === strpos($key, '.')
-        ) {
-            $ref['found'] = $found;
-            $var = &$var[$key];
+        $ref = array('found' => false, 'parts' => $parts);
+
+        if (!isset($parts[1])) {
+            $ref['found'] = isset($var[$parts[0]]);
+            $var = &$var[$parts[0]];
 
             return $var;
         }
 
-        $ref['parts'] = static::parts($key);
-
-        foreach ($ref['parts'] as $part) {
+        foreach ($parts as $part) {
             $get = null;
             $found = false;
 
@@ -202,26 +340,20 @@ class Kernel implements \ArrayAccess
 
     public function &unref($key, array &$parts = null)
     {
-        $this->prepareReference($key);
+        $this->trigger('contextprepare', ...($parts = static::parts($key)));
 
-        $parts = array($key);
         $var = &$this->hive;
 
-        if (
-            (isset($var[$key]) || array_key_exists($key, $var))
-            || !is_string($key)
-            || false === strpos($key, '.')
-        ) {
-            unset($var[$key]);
+        if (!isset($parts[1])) {
+            unset($var[$parts[0]]);
 
             return $var;
         }
 
         unset($var);
 
-        $parts = static::parts($key);
         $leaf = end($parts);
-        $get = implode('.', array_slice($parts, 0, count($parts) - 1));
+        $get = implode('.', array_slice($parts, 0, -1));
         $var = &$this->ref($get);
 
         if (is_array($var)) {
@@ -289,16 +421,83 @@ class Kernel implements \ArrayAccess
 
     protected function initialize(array $context): void
     {
-        $server = $context['SERVER'] ?? null;
+        $srv = $context['SERVER'] ?? null;
+        $cli = 'cli' === PHP_SAPI;
+        $dir = static::projectDir();
 
-        $this->hive = array();
+        $this->hive = array(
+            'CACHE_DRIVER' => null,
+            'CACHE_REF' => null,
+            'CACHE' => null,
+            'COOKIE' => $context['COOKIE'] ?? null,
+            'EMULATING' => $cli,
+            'ENV' => $context['ENV'] ?? null,
+            'FILES' => $context['FILES'] ?? null,
+            'GET' => $context['GET'] ?? null,
+            'POST' => $context['POST'] ?? null,
+            'PROJECT' => $dir,
+            'SERVER' => $context['SERVER'] ?? null,
+            'SESSION_STARTED' => static::sessionActive(),
+            'TMP' => $dir . '/var',
+        );
 
         $this->allSet($context);
     }
 
-    protected function prepareReference($key): void
+    protected function trigger(string $action, $key, ...$args): static
     {
-        // TODO: prepare reference
+        if (method_exists($this, $prepare =  $key . $action)) {
+            $this->$prepare(...$args);
+        }
+
+        return $this;
+    }
+
+    protected function sessionContextPrepare(): void
+    {
+        if ($this->hive['SESSION_STARTED']) {
+            return;
+        }
+
+        $this->hive['SESSION_STARTED'] = $this->hive['EMULATING'] || session_start();
+        $this->hive['SESSION'] = &$GLOBALS['_SESSION'];
+    }
+
+    protected function sessionContextRemove(...$keys): void
+    {
+        if ($keys) {
+            return;
+        }
+
+        $this->hive['SESSION'] = null;
+
+        static::sessionActive() && session_destroy() && session_unset();
+    }
+
+    protected function cacheContextSet($dsn): void
+    {
+        if (!$dsn) {
+            $this->hive['CACHE_DRIVER'] = null;
+            $this->hive['CACHE_REF'] = null;
+
+            return;
+        }
+
+        list(
+            $this->hive['CACHE_DRIVER'],
+            $this->hive['CACHE_REF'],
+        ) = match (true) {
+            $dsn,
+            !!preg_match(
+                '/^(?:dir|folder)\h*=\h*(.+)$/i',
+                $dsn,
+                $match,
+            ) => array(
+                static::CACHE_FOLDER,
+                $match[1] ?? ($this->hive['TMP'] . '/cache')
+            ),
+            default => null,
+        } ?? array(null, null);
     }
 
     public static function create(array $context = null): static
@@ -315,16 +514,58 @@ class Kernel implements \ArrayAccess
             'GET' => $_GET,
             'POST' => $_POST,
             'SERVER' => $_SERVER,
+            'SESSION' => null,
         ));
     }
 
-    public static function parts(string $key): array
+    public static function sessionActive(): bool
     {
-        return preg_split('/(?<!\\\)\./', $key, 0, PREG_SPLIT_NO_EMPTY);
+        return PHP_SESSION_ACTIVE === session_status();
     }
 
-    public static function some(iterable $items, callable $match, array &$found = null): bool
+    public static function slash(string $str): string
     {
+        return strtr($str, '\\', '/');
+    }
+
+    public static function projectDir(): string
+    {
+        $path = static::refExec('getFileName', null, static::class);
+        $pos = strpos($path, 'vendor');
+        $vend = false !== $pos;
+
+        return static::slash($vend ? substr($path, 0, $pos - 1) : dirname($path, 2));
+    }
+
+    public static function parts($key): array
+    {
+        if (!is_string($key) || false === strpos($key, '.')) {
+            return array($key);
+        }
+
+        return array_map(
+            static fn (string $part) => str_replace('\\', '', $part),
+            preg_split('/(?<!\\\)\./', $key, 0, PREG_SPLIT_NO_EMPTY),
+        );
+    }
+
+    public static function serialize($value): string
+    {
+        return serialize($value);
+    }
+
+    public static function unserialize(string $data, array $options = null)
+    {
+        return unserialize($data, $options ?? array());
+    }
+
+    public static function some(
+        iterable $items,
+        callable $match,
+        array &$found = null,
+    ): bool {
+        $found = null;
+
         foreach ($items as $key => $value) {
             if ($match($value, $key)) {
                 $found = compact('key', 'value');
@@ -336,8 +577,11 @@ class Kernel implements \ArrayAccess
         return false;
     }
 
-    public static function reduce(iterable $items, callable $transform, $initial = null)
-    {
+    public static function reduce(
+        iterable $items,
+        callable $transform,
+        $initial = null,
+    ) {
         $result = $initial;
 
         foreach ($items as $key => $value) {
@@ -358,8 +602,12 @@ class Kernel implements \ArrayAccess
         return $result;
     }
 
-    public static function refExec(string $call, string $fn = null, $object = null, ...$args)
-    {
+    public static function refExec(
+        string $call,
+        string $fn = null,
+        $object = null,
+        ...$args,
+    ) {
         $ref = match (true) {
             $object && $fn => new \ReflectionMethod($object, $fn),
             !!$object => new \ReflectionClass($object),
