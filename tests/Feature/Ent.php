@@ -19,6 +19,8 @@ class Ent
     public function setFoo($value)
     {
         $this->_foo = $value;
+
+        return $this;
     }
 
     public function removeFoo()

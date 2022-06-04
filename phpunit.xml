@@ -15,7 +15,8 @@
             <directory suffix=".php">./src</directory>
         </include>
         <report>
-            <html outputDirectory="./var/tests/html-coverage" lowUpperBound="50" highLowerBound="90"/>
+            <text outputFile="php://stdout" showUncoveredFiles="false" showOnlySummary="true" />
+            <html outputDirectory="./var/tests/html-coverage" lowUpperBound="50" highLowerBound="90" />
         </report>
     </coverage>
 </phpunit>

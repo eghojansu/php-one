@@ -7,6 +7,8 @@ class Kernel implements \ArrayAccess
     const CACHE_FOLDER = 'folder';
 
     protected $hive = array();
+    protected $binds = array();
+    protected $instances = array();
 
     public function __construct(array $context = null)
     {
@@ -255,6 +257,190 @@ class Kernel implements \ArrayAccess
         is_dir($dir) || ($create && mkdir($dir, 0755, true));
 
         return $dir . '/' . $key . '.cache';
+    }
+
+    public function singleton(
+        string $abstract,
+        callable|object|string $fn = null,
+    ): static {
+        return $this->bind($abstract, $fn, true);
+    }
+
+    public function bind(
+        string $abstract,
+        callable|object|string $fn = null,
+        bool $single = false,
+    ): static {
+        if (is_object($fn) && !$fn instanceof \Closure) {
+            $this->instances[$abstract] = $fn;
+        } else {
+            $this->binds[$abstract] = array(
+                match (true) {
+                    null === $fn => static fn () => new $abstract(),
+                    is_string($fn) => static fn () => new $fn(),
+                    default => $fn,
+                },
+                $single,
+            );
+        }
+
+        return $this;
+    }
+
+    public function make(string $abstract, ...$arguments)
+    {
+        if (!$arguments && static::class === $abstract) {
+            return $this;
+        }
+
+        $instance = $this->instances[$abstract] ?? null;
+
+        if (!$instance || $arguments) {
+            list($bootstrap, $single) = $this->binds[$abstract] ?? array(
+                $this->makeBootstrap($abstract),
+                false,
+            );
+
+            if (!isset($this->binds[$abstract])) {
+                $this->bind($abstract, $bootstrap);
+            }
+
+            $instance = $this->call($bootstrap, ...$arguments);
+
+            if ($single) {
+                $this->instances[$abstract] = $instance;
+            }
+        }
+
+        return $instance;
+    }
+
+    public function call(callable|string $fn, ...$arguments)
+    {
+        $call = $fn;
+
+        if (!is_callable($call)) {
+            $call = $this->callEnsure($fn, true);
+        }
+
+        $params = $this->makeParams($this->callRef($call));
+
+        return $call(...$params(...$arguments));
+    }
+
+    public function callArguments(callable|string $fn, array $arguments = null)
+    {
+        return $this->call($fn, ...array_values($arguments ?? array()));
+    }
+
+    public function callEnsure(string $fn, bool $throw = false): callable|bool
+    {
+        $call = $fn;
+
+        if (preg_match('/^(.+)(\:|@)(.+)$/', $fn, $match)) {
+            $call = array(
+                '@' === $match[2] ? $this->make($match[1]) : $match[1],
+                $match[3],
+            );
+        }
+
+        if (($failed = !is_callable($call)) && $throw) {
+            throw new \InvalidArgumentException(sprintf('Invalid call: %s', $fn));
+        }
+
+        return $failed ? false : $call;
+    }
+
+    protected function callRef(callable $fn): \ReflectionFunctionAbstract
+    {
+        if (is_array($fn)) {
+            return new \ReflectionMethod(...$fn);
+        }
+
+        return new \ReflectionFunction($fn);
+    }
+
+    protected function makeBootstrap(string $abstract): \Closure
+    {
+        $ref = new \ReflectionClass($abstract);
+        $constructor = $ref->getConstructor();
+        $params = $constructor ? $this->makeParams($constructor) : static fn () => array();
+
+        return match (true) {
+            !$ref->isInstantiable() => static fn () => throw new \InvalidArgumentException(
+                sprintf('Cannot instantiate: %s', $abstract),
+            ),
+            null === $constructor => static fn () => new $abstract,
+            default => static fn (...$arguments) => new $abstract(...$params(...$arguments)),
+        };
+    }
+
+    protected function makeParams(\ReflectionFunctionAbstract $ref): \Closure
+    {
+        return function (...$arguments) use ($ref) {
+            $rest = $arguments;
+            $result = array();
+
+            foreach ($ref->getParameters() as $param) {
+                $type = $param->getType();
+                $class = null;
+
+                if ($param->isVariadic()) {
+                    array_push($result, ...array_splice($rest, 0));
+                } elseif ($type && null !== ($pos = $this->paramTypeMatch($type, $rest, $class))) {
+                    $result[] = array_splice($rest, $pos, 1)[0];
+                } elseif ($param->isDefaultValueAvailable()) {
+                    $result[] = $param->getDefaultValue();
+                } elseif ($class) {
+                    $result[] = $this->make($class);
+                } elseif ($rest) {
+                    $result[] = array_shift($rest);
+                } elseif ($param->allowsNull()) {
+                    $result[] = null;
+                } else {
+                    break;
+                }
+            }
+
+            array_push($result, ...$rest);
+
+            return $result;
+        };
+    }
+
+    protected function paramTypeMatch(\ReflectionType $type, array $args, string &$class = null): int|null
+    {
+        $types = array();
+
+        if ($type instanceof \ReflectionUnionType || $type instanceof \ReflectionIntersectionType) {
+            $types = $type->getTypes();
+        } elseif ($type instanceof \ReflectionNamedType) {
+            $types = array($type);
+        }
+
+        $pos = static::some(
+            $args,
+            static fn ($arg) => static::some(
+                $types,
+                static fn (\ReflectionNamedType $type) => (
+                    ($name = $type->getName())
+                    && (
+                        ($type->isBuiltin() && call_user_func('is_' . $name, $arg))
+                        || $arg instanceof $name
+                    )
+                ),
+            ),
+            $found,
+        ) ? $found['key'] : null;
+        $class = null === $pos ? (
+            static::some(
+                $types,
+                static fn (\ReflectionNamedType $type) => !$type->isBuiltin(),
+                $found,
+            ) ? $found['value']->getName() : null
+        ) : null;
+
+        return $pos;
     }
 
     public function &ref($key, bool $add = true, array &$ref = null)
