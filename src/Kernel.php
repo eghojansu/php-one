@@ -9,6 +9,8 @@ class Kernel implements \ArrayAccess
     protected $hive = array();
     protected $binds = array();
     protected $instances = array();
+    protected $events = array();
+    protected $sorted = array();
 
     public function __construct(array $context = null)
     {
@@ -441,6 +443,107 @@ class Kernel implements \ArrayAccess
         ) : null;
 
         return $pos;
+    }
+
+    public function listen(
+        string $eventName,
+        callable|string $fn,
+        int $priority = null,
+        bool $once = null,
+        string $id = null,
+    ): static {
+        $event = array($fn, $once ?? false, $priority ?? -1);
+
+        if ($id) {
+            $this->events[$eventName][$id] = $event;
+        } else {
+            $this->events[$eventName][] = $event;
+        }
+
+        unset($this->sorted[$eventName]);
+
+        return $this;
+    }
+
+    public function on(
+        string $eventName,
+        callable|string $fn,
+        int $priority = null,
+        string $id = null,
+    ): static {
+        return $this->listen($eventName, $fn, $priority, false, $id);
+    }
+
+    public function one(
+        string $eventName,
+        callable|string $fn,
+        int $priority = null,
+        string $id = null,
+    ): static {
+        return $this->listen($eventName, $fn, $priority, true, $id);
+    }
+
+    public function off(string $eventName, string|int $id = null): static
+    {
+        if (null === $id) {
+            unset($this->events[$eventName]);
+            unset($this->sorted[$eventName]);
+        } else {
+            unset($this->events[$eventName][$id]);
+            unset($this->sorted[$eventName][$id]);
+        }
+
+        return $this;
+    }
+
+    public function dispatch(
+        EventInterface $event,
+        string $name = null,
+        bool $once = false,
+    ): static {
+        $eventName = $name ?? $event->name() ?? get_class($event);
+        $handlers = $this->eventHandlers($eventName);
+
+        if ($once) {
+            $this->off($eventName);
+        }
+
+        static::some(
+            $handlers,
+            function (array $handler, $id) use ($eventName, $once, $event) {
+                if ($event->isPropagationStopped()) {
+                    return true;
+                }
+
+                list($fn, $one) = $handler;
+
+                $this->call($fn, $event);
+
+                if ($one && !$once) {
+                    $this->off($eventName, $id);
+                }
+
+                return $event->isPropagationStopped();
+            },
+        );
+
+        return $this;
+    }
+
+    protected function eventHandlers(string $eventName): array
+    {
+        $sorted = &$this->sorted[$eventName];
+
+        if (null === $sorted) {
+            $sorted = $this->events[$eventName] ?? array();
+
+            uasort(
+                $sorted,
+                static fn (array $a, array $b) => end($b) <=> end($a),
+            );
+        }
+
+        return $sorted;
     }
 
     public function &ref($key, bool $add = true, array &$ref = null)
