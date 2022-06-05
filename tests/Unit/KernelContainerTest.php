@@ -3,10 +3,10 @@
 namespace Tests\Unit;
 
 use Ekok\One\Kernel;
-use Tests\Feature\Arr;
-use Tests\Feature\Bag;
-use Tests\Feature\Ent;
-use Tests\Feature\Obj;
+use Tests\_fixtures\Arr;
+use Tests\_fixtures\Bag;
+use Tests\_fixtures\Ent;
+use Tests\_fixtures\Obj;
 
 class KernelContainerTest extends TestCase
 {
@@ -109,7 +109,7 @@ class KernelContainerTest extends TestCase
 
         $format = 'Y-m-d';
         $trim = $this->kernel->callEnsure('trim');
-        $getFoo = $this->kernel->callEnsure('Tests\\Feature\\Ent@getFoo');
+        $getFoo = $this->kernel->callEnsure('Tests\\_fixtures\\Ent@getFoo');
         $today = $this->kernel->callEnsure('DateTime:createFromFormat');
 
         $this->assertSame('foo', $trim(' foo '));
@@ -123,5 +123,12 @@ class KernelContainerTest extends TestCase
         $this->expectExceptionMessage('Invalid call: DateTime:xyz');
 
         $this->kernel->call('DateTime:xyz');
+    }
+
+    public function testCallSelfMethod()
+    {
+        $result = $this->kernel->call('@call', static fn () => 'real call');
+
+        $this->assertSame('real call', $result);
     }
 }

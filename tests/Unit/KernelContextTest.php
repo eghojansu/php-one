@@ -2,10 +2,10 @@
 
 namespace Tests\Unit;
 
-use Tests\Feature\Arr;
-use Tests\Feature\Bag;
-use Tests\Feature\Ent;
-use Tests\Feature\Obj;
+use Tests\_fixtures\Arr;
+use Tests\_fixtures\Bag;
+use Tests\_fixtures\Ent;
+use Tests\_fixtures\Obj;
 
 class KernelContextTest extends TestCase
 {
@@ -13,7 +13,7 @@ class KernelContextTest extends TestCase
 
     public function testContext()
     {
-        $this->assertCount(13, $this->kernel->context());
+        $this->assertCount(15, $this->kernel->context());
     }
 
     public function testRefBasic()

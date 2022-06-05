@@ -82,4 +82,41 @@ class KernelHelperTest extends TestCase
         $this->assertSame('format', Kernel::refExec('getName', 'format', 'DateTime'));
         $this->assertSame('DateTime', Kernel::refExec('getName', null, 'DateTime'));
     }
+
+    public function testCast()
+    {
+        $this->assertSame(null, Kernel::cast(null));
+        $this->assertSame(true, Kernel::cast(' true '));
+        $this->assertSame(array(1,2), Kernel::cast(array(1,2)));
+        $this->assertSame(1000, Kernel::cast('1000'));
+        $this->assertSame(77, Kernel::cast('0x4D')); // hex
+        $this->assertSame(77, Kernel::cast('0b01001101')); // binary
+        $this->assertSame(77, Kernel::cast('0115')); // octal
+    }
+
+    public function testMkdir()
+    {
+        $dir = $this->tmp('test-mkdir');
+
+        $this->assertTrue(Kernel::mkdir($dir));
+        $this->assertTrue(Kernel::mkdir($dir));
+
+        rmdir($dir);
+    }
+
+    public function testReadWrite()
+    {
+        $file = $this->tmp('readwrite.txt');
+
+        // not yet created
+        $this->assertNull(Kernel::read($file));
+
+        $this->assertSame(3, Kernel::write($file, 'foo'));
+        $this->assertSame('foo', Kernel::read($file));
+
+        $this->assertSame(6, Kernel::write($file, 'barbaz', FILE_APPEND));
+        $this->assertSame('foobarbaz', Kernel::read($file));
+
+        unlink($file);
+    }
 }

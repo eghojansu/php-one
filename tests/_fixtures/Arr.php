@@ -1,29 +1,29 @@
 <?php
 
-namespace Tests\Feature;
+namespace Tests\_fixtures;
 
-class Bag
+class Arr implements \ArrayAccess
 {
     private $data = array();
 
-    public function has($offset)
+    public function offsetExists($offset): bool
     {
         return isset($this->data[$offset]);
     }
 
-    public function get($offset)
+    public function &offsetGet($offset)
     {
         $var = &$this->data[$offset];
 
         return $var;
     }
 
-    public function set($offset,  $value)
+    public function offsetSet($offset, $value): void
     {
         $this->data[$offset] = $value;
     }
 
-    public function remove($offset)
+    public function offsetUnset($offset): void
     {
         unset($this->data[$offset]);
     }

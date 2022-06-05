@@ -13,6 +13,16 @@ abstract class TestCase extends TestCaseBase
     /** @var bool */
     protected $kernelize = false;
 
+    protected function data(string $path = null): string
+    {
+        return dirname(__DIR__) . '/_data' . ($path ? '/' : null) . $path;
+    }
+
+    protected function tmp(string $path = null): string
+    {
+        return dirname(__DIR__, 2) . '/var' . ($path ? '/' : null) . $path;
+    }
+
     protected function setUp(): void
     {
         if ($this->kernelize) {

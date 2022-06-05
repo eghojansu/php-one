@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:noNamespaceSchemaLocation="./vendor/phpunit/phpunit/phpunit.xsd"
-         cacheResultFile="./var/tests/.phpunit.result.cache"
+         cacheResultFile="./var/tests/_output/.phpunit.result.cache"
          bootstrap="./vendor/autoload.php"
          colors="true"
 >
@@ -16,7 +16,7 @@
         </include>
         <report>
             <text outputFile="php://stdout" showUncoveredFiles="false" showOnlySummary="true" />
-            <html outputDirectory="./var/tests/html-coverage" lowUpperBound="50" highLowerBound="90" />
+            <html outputDirectory="./tests/_output/html-coverage" lowUpperBound="50" highLowerBound="90" />
         </report>
     </coverage>
 </phpunit>

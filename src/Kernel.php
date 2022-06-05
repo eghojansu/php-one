@@ -4,6 +4,10 @@ namespace Ekok\One;
 
 class Kernel implements \ArrayAccess
 {
+    const ENV_DEV = 'dev';
+    const ENV_PROD = 'prod';
+    const ENV_TEST = 'test';
+    const CALL_EXPR = '/^(.+)?\s*([:@])\s*(.+)$/';
     const CACHE_FOLDER = 'folder';
 
     protected $hive = array();
@@ -20,6 +24,172 @@ class Kernel implements \ArrayAccess
     public function context(): array
     {
         return $this->hive;
+    }
+
+    public function isDev(): bool
+    {
+        return static::ENV_DEV === $this->hive['APP_ENV'];
+    }
+
+    public function isProduction(): bool
+    {
+        return static::ENV_PROD === $this->hive['APP_ENV'];
+    }
+
+    public function isTest(): bool
+    {
+        return static::ENV_TEST === $this->hive['APP_ENV'];
+    }
+
+    public function isDebug(): bool
+    {
+        return !!$this->hive['DEBUG'];
+    }
+
+    public function env(string ...$checks): string|bool
+    {
+        $env = $this->hive['APP_ENV'];
+
+        if ($checks) {
+            return static::some(
+                $checks,
+                static fn (string $check) => 0 === strcasecmp($check, $env),
+            );
+        }
+
+        return $env;
+    }
+
+    public function config(string|null ...$files): static
+    {
+        array_walk(
+            $files,
+            function (string|null $file) {
+                if (!$file || !file_exists($file)) {
+                    return;
+                }
+
+                preg_match_all(
+                    '/(?<=^|\n)(?:' .
+                        '\[(?<section>.+?)\]|' .
+                        '(?<key>[^\h\r\n;].*?)\h*=\h*' .
+                        '(?<val>(?:\\\\\h*\r?\n|.+?)*)' .
+                    ')(?=\r?\n|$)/',
+                    static::read($file),
+                    $matches,
+                    PREG_SET_ORDER,
+                );
+                $cmd = null;
+                $hok = null;
+
+                array_walk(
+                    $matches,
+                    function (array $match) use (&$sec, &$cmd, &$hok) {
+                        if ($match['section']) {
+                            // prepare section with hooks
+                            if (
+                                preg_match(
+                                    '/^(?<sec>[^:]+)(?:\:(?<fun>.+))?/',
+                                    $match['section'],
+                                    $hok,
+                                )
+                                && 0 !== strcasecmp('globals', $hok['sec'])
+                                && !preg_match(static::CALL_EXPR, $hok['sec'])
+                            ) {
+                                $cmd = null;
+                                $hok += array(
+                                    'fun' => null,
+                                    'add' => $hok['sec'] . '.',
+                                );
+
+                                $this->devoid($hok['sec'], null);
+                            } else {
+                                $hok = null;
+
+                                preg_match(static::CALL_EXPR, $match['section'], $cmd);
+                            }
+
+                            return;
+                        }
+
+                        $key = $this->configReplace($match['key'], $replaced);
+                        $val = array_map(
+                            function ($val) {
+                                $val = $this->configReplace(
+                                    trim(preg_replace('/\\\\"/', '"', $val)),
+                                    $replaced,
+                                );
+
+                                return $replaced ? $val : $this->cast($val);
+                            },
+                            // Mark quoted strings with 0x00 whitespace
+                            str_getcsv(
+                                preg_replace(
+                                    '/(?<!\\\\)(")(.*?)\1/',
+                                    "\\1\x00\\2\\1",
+                                    trim(
+                                        preg_replace(
+                                            '/\\\\\h*(\r?\n)/',
+                                            '\1',
+                                            $match['val'],
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        );
+
+                        if ($cmd) {
+                            $this->call(
+                                $cmd[0],
+                                $replaced ? $key : $this->cast($key),
+                                ...$val,
+                            );
+                        } else {
+                            if ($hok['fun'] ?? null) {
+                                $val = $this->callArguments($hok['fun'], $val);
+                            } elseif (count($val) === 1) {
+                                $val = $val[0];
+                            }
+
+                            $this->set(($hok['add'] ?? null) . $key, $val);
+                        }
+                    },
+                );
+            },
+        );
+
+        return $this;
+    }
+
+    protected function configReplace($value, bool &$replaced = null)
+    {
+        $replaced = false;
+
+        if (
+            is_string($value)
+            && preg_match(
+                '/^(.+)?\{([@\w.\\\]+)\}(.+)?$/',
+                $value,
+                $match,
+            )
+        ) {
+            list($search, $prefix, $keyword, $suffix) = $match + array(3 => null);
+
+            $update = match (true) {
+                defined($keyword) => constant($keyword),
+                '@' === $keyword[0] => $this->call($keyword),
+                default => $this->get($keyword),
+            };
+            $replaced = true;
+
+            return (
+                ($prefix || $suffix) ?
+                    $prefix . str_replace($search, $update, $value) . $suffix :
+                    $update
+            );
+        }
+
+        return $value;
     }
 
     public function has($key): bool
@@ -52,6 +222,13 @@ class Kernel implements \ArrayAccess
         $this->unref($key, $parts);
 
         return $this->trigger('contextremove', ...$parts);
+    }
+
+    public function devoid($key, $value): static
+    {
+        $this->has($key) || $this->set($key, $value);
+
+        return $this;
     }
 
     public function allHas(...$keys): bool
@@ -256,7 +433,9 @@ class Kernel implements \ArrayAccess
     {
         $dir = $this->hive['CACHE_REF'];
 
-        is_dir($dir) || ($create && mkdir($dir, 0755, true));
+        if ($create) {
+            static::mkdir($dir, true, 0755);
+        }
 
         return $dir . '/' . $key . '.cache';
     }
@@ -339,10 +518,17 @@ class Kernel implements \ArrayAccess
     {
         $call = $fn;
 
-        if (preg_match('/^(.+)(\:|@)(.+)$/', $fn, $match)) {
+        if (preg_match(static::CALL_EXPR, $fn, $match)) {
+            list(, $class, $mode, $method) = $match;
+
+            $instance = '@' === $mode;
             $call = array(
-                '@' === $match[2] ? $this->make($match[1]) : $match[1],
-                $match[3],
+                $class ? (
+                    $instance ? $this->make($class) : $class
+                ) : (
+                    $instance ? $this : static::class
+                ),
+                $method,
             );
         }
 
@@ -605,7 +791,7 @@ class Kernel implements \ArrayAccess
                     } + array(null, array($part));
                     $found = method_exists($var, $check) && $var->$check(...$args);
 
-                    if (self::refExec('returnsReference', $get, $var)) {
+                    if (static::refExec('returnsReference', $get, $var)) {
                         $var = &$var->$get(...$args);
                     } else {
                         $var = $var->$get(...$args);
@@ -715,10 +901,12 @@ class Kernel implements \ArrayAccess
         $dir = static::projectDir();
 
         $this->hive = array(
+            'APP_ENV' => static::ENV_PROD,
             'CACHE_DRIVER' => null,
             'CACHE_REF' => null,
             'CACHE' => null,
             'COOKIE' => $context['COOKIE'] ?? null,
+            'DEBUG' => false,
             'EMULATING' => $cli,
             'ENV' => $context['ENV'] ?? null,
             'FILES' => $context['FILES'] ?? null,
@@ -796,7 +984,7 @@ class Kernel implements \ArrayAccess
 
     public static function createFromGlobals(array $context = null): static
     {
-        return self::create(($context ?? array()) + array(
+        return static::create(($context ?? array()) + array(
             'COOKIE' => $_COOKIE,
             'ENV' => $_ENV,
             'FILES' => $_FILES,
@@ -826,6 +1014,30 @@ class Kernel implements \ArrayAccess
         return static::slash($vend ? substr($path, 0, $pos - 1) : dirname($path, 2));
     }
 
+    public static function mkdir(
+        string $path,
+        bool $recursive = null,
+        int $perms = null,
+    ): bool {
+        return is_dir($path) || mkdir($path, $perms ?? 0777, $recursive ?? false);
+    }
+
+    public static function read(string $file, bool $lf = false): string|null
+    {
+        if (!file_exists($file)) {
+            return null;
+        }
+
+		$out = file_get_contents($file);
+
+		return $lf ? preg_replace('/\r\n|\r/', "\n", $out) : $out;
+	}
+
+    public static function write(string $file, string $data, int $flag = LOCK_EX): int|false
+    {
+		return file_put_contents($file, $data, $flag);
+	}
+
     public static function parts($key): array
     {
         if (!is_string($key) || false === strpos($key, '.')) {
@@ -837,6 +1049,22 @@ class Kernel implements \ArrayAccess
             preg_split('/(?<!\\\)\./', $key, 0, PREG_SPLIT_NO_EMPTY),
         );
     }
+
+    public static function cast($val)
+    {
+        if (!is_string($val)) {
+            return $val;
+        }
+
+        $str = trim($val);
+
+        return match (true) {
+            !!preg_match('/^(?:0x[0-9a-f]+|0[0-7]+|0b[01]+)$/i', $str) => intval($str, 0),
+            defined($str) => constant($str),
+            is_numeric($str) => $str + 0,
+            default => $str,
+        };
+	}
 
     public static function serialize($value): string
     {
